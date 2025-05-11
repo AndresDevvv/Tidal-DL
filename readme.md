@@ -86,10 +86,8 @@ Before you begin, ensure you have the following installed on your system:
         ```
     *   Enter your choice (`1` for a song, `2` for a video).
     *   **Provide URL:** Paste the full Tidal URL for the song or music video you want to download.
-        *   **Song URL Examples:**
+        *   **Song URL Example:**
             *   `https://tidal.com/browse/track/12345678`
-            *   `https://tidal.com/track/12345678`
-            *   `https://tidal.com/u/SOME_USER_ID/track/12345678` (shared links)
         *   **Video URL Example:**
             *   `https://tidal.com/browse/video/87654321`
     *   The script will extract the ID from the URL.
