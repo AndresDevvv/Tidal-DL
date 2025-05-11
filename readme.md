@@ -115,8 +115,8 @@ Tidal-DL/
 ├── node_modules/           # Project dependencies (created by `npm install`)
 ├── v2/                     # Core logic modules
 │   ├── login.mjs           # Handles Tidal authentication & session management
-│   ├── music.js            # Logic for music track downloads
-│   └── video.js            # Logic for music video downloads
+│   ├── music.mjs            # Logic for music track downloads
+│   └── video.mjs            # Logic for music video downloads
 ├── .gitignore              # Specifies intentionally untracked files for Git
 ├── package-lock.json       # Records exact versions of installed dependencies
 ├── package.json            # Project metadata and list of dependencies
