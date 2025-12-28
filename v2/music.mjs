@@ -11,9 +11,14 @@ const execAsync = util.promisify(exec);
 
 const TIDAL_API_BASE_URL = 'https://listen.tidal.com/v1';
 const ARIA2C_DEFAULT_OPTIONS = '-c -x 16 -s 16 -k 1M -j 16 --console-log-level=warn --allow-overwrite=true --auto-file-renaming=false';
+const AAC_QUALITIES = new Set(['LOW', 'HIGH']);
 
 function buildPlaybackInfoUrl(trackId, audioQuality) {
     return `${TIDAL_API_BASE_URL}/tracks/${trackId}/playbackinfo?audioquality=${audioQuality}&playbackmode=STREAM&assetpresentation=FULL`;
+}
+
+function getFileExtensionForQuality(audioQuality) {
+    return AAC_QUALITIES.has(audioQuality) ? '.m4a' : '.flac';
 }
 
 function buildApiErrorMessage(prefix, errorResponse, audioQualityForContext = null) {
@@ -93,7 +98,7 @@ async function downloadMusicTrack(options) {
     const playbackInfoUrl = buildPlaybackInfoUrl(trackId, audioQuality);
     const apiHeaders = { 'Authorization': `Bearer ${accessToken}` };
 
-    const outputFileName = `${trackId}_${audioQuality}.flac`;
+    const outputFileName = `${trackId}_${audioQuality}${getFileExtensionForQuality(audioQuality)}`;
     const outputFilePath = path.join(outputDir, outputFileName);
     let tempDirPath = '';
 

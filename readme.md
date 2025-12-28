@@ -1,6 +1,6 @@
 # Tidal-DL 🌊🎵🎬
 
-Download music tracks and music videos directly from Tidal.
+Download music tracks, playlists, and music videos directly from Tidal.
 
 ---
 
@@ -14,15 +14,20 @@ Download music tracks and music videos directly from Tidal.
         *   High (AAC 320 kbps)
         *   HiFi (CD Quality FLAC 16-bit/44.1kHz - Lossless)
         *   Max (HiRes FLAC up to 24-bit/192kHz - Lossless)
-    *   Downloads are saved as `.flac` files.
-    *   Automatic renaming to `Artist - Title.flac` (with confirmation) based on metadata fetched from Tidal.
+    *   Downloads are saved as `.m4a` (AAC) or `.flac` (lossless) files.
+    *   Automatic renaming to `Artist - Title` (with confirmation) based on metadata fetched from Tidal.
 *   **Music Video Downloads:**
     *   Lists available video resolutions and bandwidths for you to select the best option.
     *   Downloads are saved as `.ts` files.
     *   Attempts to name files using the video title scraped from the Tidal page.
+*   **Playlist Downloads:**
+    *   Downloads all tracks from a playlist at a selected audio quality.
+    *   Optional bulk renaming to `Artist - Title`.
+    *   Optional MP3 conversion after download (requires `ffmpeg`).
 *   **Efficient Downloads:** Utilizes `aria2c` for fast, resumable, and segmented downloading.
 *   **Authentication:** Secure OAuth2 device login. Session details (including access and refresh tokens) are stored locally in `tidal_session.json` for persistence, reducing the need to log in repeatedly.
 *   **Interactive CLI:** A user-friendly command-line interface guides you through the selection and download process.
+*   **Custom Output Directory:** Set the base download folder when the app starts.
 
 ## 🚀 Prerequisites
 
@@ -57,6 +62,12 @@ Before you begin, ensure you have the following installed on your system:
     node run startup
     ```
 
+    or 
+
+    ```
+    node startup.mjs
+    ```
+
 2.  **First-Time Authentication:**
     *   On your first run, the script will guide you through the Tidal authentication process.
     *   You will see a message like this:
@@ -81,26 +92,33 @@ Before you begin, ensure you have the following installed on your system:
         What would you like to do?
           1. Download a Song
           2. Download a Music Video
-          3. Exit
-        Enter your choice (1-3):
+          3. Download a Playlist
+          4. Exit
+        Enter your choice (1-4):
         ```
-    *   Enter your choice (`1` for a song, `2` for a video).
-    *   **Provide URL:** Paste the full Tidal URL for the song or music video you want to download.
+    *   Enter your choice (`1` for a song, `2` for a video, `3` for a playlist).
+    *   **Provide URL:** Paste the full Tidal URL for the song, video, or playlist you want to download.
         *   **Song URL Example:**
             *   `https://tidal.com/browse/track/12345678`
         *   **Video URL Example:**
             *   `https://tidal.com/browse/video/87654321`
+        *   **Playlist URL Example:**
+            *   `https://tidal.com/browse/playlist/PLAYLIST_UUID`
     *   The script will extract the ID from the URL.
     *   **Select Quality:**
-        *   **For Songs:** You'll be presented with a list of available audio qualities (Standard, High, HiFi, Max). Select your preferred quality.
+        *   **For Songs and Playlists:** You'll be presented with a list of available audio qualities (Standard, High, HiFi, Max). Select your preferred quality.
         *   **For Music Videos:** The script will fetch available video streams and list them by resolution and bandwidth (best first). Select your preferred stream.
     *   **File Naming Confirmation (Optional):**
         *   **For Songs:** If metadata (artist, title) is successfully fetched, you'll be asked: `Do you want to rename the file based on Artist - Title? (yes/no):`.
+        *   **For Playlists:** You'll be asked once whether to rename all tracks using `Artist - Title`.
         *   **For Music Videos:** If a title is successfully scraped from the Tidal page, you might be asked: `Use "Scraped Video Title.ts" as filename? (y/n):`.
+    *   **MP3 Conversion (Optional):**
+        *   If enabled at startup, the script will convert downloaded audio files to MP3 using `ffmpeg`.
     *   **Download:** The download will start. `aria2c` handles the actual downloading of segments, which are then combined into the final file.
 
 4.  **Output Location:**
     *   Downloaded songs are saved in the `./downloads/music/` directory relative to where you run the script.
+    *   Downloaded playlists are saved in the `./downloads/playlists/<playlist name>/` directory.
     *   Downloaded music videos are saved in the `./downloads/videos/` directory.
 
 ## 📁 File Structure Overview
@@ -109,11 +127,13 @@ Before you begin, ensure you have the following installed on your system:
 Tidal-DL/
 ├── downloads/              # Default directory for all downloaded files
 │   ├── music/              # Stores downloaded songs (.flac)
+│   ├── playlists/          # Stores downloaded playlist tracks (.flac)
 │   └── videos/             # Stores downloaded music videos (.ts)
 ├── node_modules/           # Project dependencies (created by `npm install`)
 ├── v2/                     # Core logic modules
 │   ├── login.mjs           # Handles Tidal authentication & session management
 │   ├── music.mjs            # Logic for music track downloads
+│   ├── playlist.mjs         # Logic for playlist downloads
 │   └── video.mjs            # Logic for music video downloads
 ├── .gitignore              # Specifies intentionally untracked files for Git
 ├── package-lock.json       # Records exact versions of installed dependencies
