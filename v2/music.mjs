@@ -11,9 +11,14 @@ const execAsync = util.promisify(exec);
 
 const TIDAL_API_BASE_URL = 'https://listen.tidal.com/v1';
 const ARIA2C_DEFAULT_OPTIONS = '-c -x 16 -s 16 -k 1M -j 16 --console-log-level=warn --allow-overwrite=true --auto-file-renaming=false';
+const AAC_QUALITIES = new Set(['LOW', 'HIGH']);
 
 function buildPlaybackInfoUrl(trackId, audioQuality) {
     return `${TIDAL_API_BASE_URL}/tracks/${trackId}/playbackinfo?audioquality=${audioQuality}&playbackmode=STREAM&assetpresentation=FULL`;
+}
+
+function getFileExtensionForQuality(audioQuality) {
+    return AAC_QUALITIES.has(audioQuality) ? '.m4a' : '.flac';
 }
 
 function buildApiErrorMessage(prefix, errorResponse, audioQualityForContext = null) {
@@ -84,6 +89,7 @@ async function downloadMusicTrack(options) {
         accessToken,
         outputDir = '.',
         tempDirPrefix = 'temp_tidal_music',
+        verbose = true,
     } = options;
 
     if (!trackId || !audioQuality || !accessToken) {
@@ -93,12 +99,23 @@ async function downloadMusicTrack(options) {
     const playbackInfoUrl = buildPlaybackInfoUrl(trackId, audioQuality);
     const apiHeaders = { 'Authorization': `Bearer ${accessToken}` };
 
-    const outputFileName = `${trackId}_${audioQuality}.flac`;
+    const outputFileName = `${trackId}_${audioQuality}${getFileExtensionForQuality(audioQuality)}`;
     const outputFilePath = path.join(outputDir, outputFileName);
     let tempDirPath = '';
 
+    const log = (...args) => {
+        if (verbose) {
+            console.log(...args);
+        }
+    };
+    const warn = (...args) => {
+        if (verbose) {
+            console.warn(...args);
+        }
+    };
+
     try {
-        console.log(`Requesting playback info for track ${trackId} (Quality: ${audioQuality})...`);
+        log(`Requesting playback info for track ${trackId} (Quality: ${audioQuality})...`);
         const response = await axios.get(playbackInfoUrl, { headers: apiHeaders });
         const playbackData = response.data;
 
@@ -106,28 +123,28 @@ async function downloadMusicTrack(options) {
             const detail = playbackData?.userMessage || playbackData?.title || 'Manifest not found in API response.';
             throw new Error(`Playback info response missing manifest: ${detail}`);
         }
-        console.log(`Received playback info for track ${playbackData.trackId}.`);
+        log(`Received playback info for track ${playbackData.trackId}.`);
 
         const manifestXml = Buffer.from(playbackData.manifest, 'base64').toString('utf8');
-        console.log('Parsing XML manifest...');
+        log('Parsing XML manifest...');
         const { segmentUrls, segmentBasenames } = await parseManifestAndExtractSegments(manifestXml);
-        console.log(`Found ${segmentUrls.length} segments to download.`);
+        log(`Found ${segmentUrls.length} segments to download.`);
 
         tempDirPath = path.join(outputDir, `${tempDirPrefix}_${trackId}_${audioQuality}_${Date.now()}`);
         await fs.mkdir(tempDirPath, { recursive: true });
-        console.log(`Temporary directory created: ${tempDirPath}`);
+        log(`Temporary directory created: ${tempDirPath}`);
 
         const aria2cInputFilePath = path.join(tempDirPath, 'segment_urls.txt');
         await fs.writeFile(aria2cInputFilePath, segmentUrls.join('\n'));
-        console.log('Generated URL list for aria2c.');
+        log('Generated URL list for aria2c.');
 
         const aria2cCommand = `aria2c ${ARIA2C_DEFAULT_OPTIONS} -d "${tempDirPath}" -i "${aria2cInputFilePath}"`;
-        console.log('Starting download with aria2c...');
-        console.log(`Executing: ${aria2cCommand}`);
+        log('Starting download with aria2c...');
+        log(`Executing: ${aria2cCommand}`);
         await execAsync(aria2cCommand);
-        console.log('aria2c download process completed.');
+        log('aria2c download process completed.');
 
-        console.log(`Concatenating ${segmentBasenames.length} segments into ${outputFilePath}...`);
+        log(`Concatenating ${segmentBasenames.length} segments into ${outputFilePath}...`);
         const outputStream = createWriteStream(outputFilePath);
 
         try {
@@ -137,7 +154,7 @@ async function downloadMusicTrack(options) {
                     const segmentData = await fs.readFile(segmentPath);
                     outputStream.write(segmentData);
                 } catch (readError) {
-                    console.warn(`Segment ${segmentPath} unreadable or missing: ${readError.message}. Skipping.`);
+                    warn(`Segment ${segmentPath} unreadable or missing: ${readError.message}. Skipping.`);
                 }
             }
         } finally {
@@ -149,7 +166,7 @@ async function downloadMusicTrack(options) {
             outputStream.on('error', (err) => reject(new Error(`Error writing to output file ${outputFilePath}: ${err.message}`)));
         });
 
-        console.log(`Successfully created output file: ${outputFilePath}`);
+        log(`Successfully created output file: ${outputFilePath}`);
         return { success: true, filePath: path.resolve(outputFilePath) };
 
     } catch (error) {
@@ -168,9 +185,9 @@ async function downloadMusicTrack(options) {
         if (tempDirPath) {
             try {
                 await fs.stat(tempDirPath);
-                console.log(`Cleaning up temporary directory: ${tempDirPath}`);
+                log(`Cleaning up temporary directory: ${tempDirPath}`);
                 await fs.rm(tempDirPath, { recursive: true, force: true });
-                console.log('Temporary directory cleanup complete.');
+                log('Temporary directory cleanup complete.');
             } catch (cleanupError) {
                 if (cleanupError.code === 'ENOENT') {
                 } else {
