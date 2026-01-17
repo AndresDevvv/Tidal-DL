@@ -16,6 +16,23 @@ import { fetchPlaylistMetadata, fetchPlaylistTrackIds } from './v2/playlist.mjs'
 const execAsync = util.promisify(exec);
 const TIDAL_API_BASE_URL = 'https://listen.tidal.com/v1';
 
+const ANSI_COLORS = {
+    green: '32',
+    yellow: '33',
+    red: '31',
+    cyan: '36',
+    dim: '2',
+};
+
+function colorize(colorCode, text) {
+    if (!process.stdout.isTTY) return text;
+    return `\x1b[${colorCode}m${text}\x1b[0m`;
+}
+
+function formatStatus(label, colorCode) {
+    return colorize(colorCode, label);
+}
+
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -161,13 +178,17 @@ async function convertFileToMp3(inputFilePath, options) {
 
     const outputFilePath = await resolveMp3OutputPath(inputFilePath);
     if (!outputFilePath) {
-        console.log(`MP3 conversion skipped (already MP3): ${path.basename(inputFilePath)}`);
+        if (options?.verbose !== false) {
+            console.log(`MP3 conversion skipped (already MP3): ${path.basename(inputFilePath)}`);
+        }
         return inputFilePath;
     }
 
     const bitrateKbps = options.bitrateKbps || 320;
     const command = `ffmpeg -y -i "${inputFilePath}" -b:a ${bitrateKbps}k "${outputFilePath}"`;
-    console.log(`Converting to MP3 (${bitrateKbps} kbps): ${path.basename(outputFilePath)}`);
+    if (options?.verbose !== false) {
+        console.log(`Converting to MP3 (${bitrateKbps} kbps): ${path.basename(outputFilePath)}`);
+    }
 
     try {
         await execAsync(command);
@@ -176,7 +197,9 @@ async function convertFileToMp3(inputFilePath, options) {
         }
         return outputFilePath;
     } catch (error) {
-        console.error(`MP3 conversion failed for ${path.basename(inputFilePath)}: ${error.message}`);
+        if (options?.verbose !== false) {
+            console.error(`MP3 conversion failed for ${path.basename(inputFilePath)}: ${error.message}`);
+        }
         return null;
     }
 }
@@ -328,8 +351,13 @@ function sanitizeFilenameSegment(name) {
 }
 
 async function renameDownloadedSong(originalFilePath, songUrl, options = {}) {
-    const { promptUser = true, autoRename = false, trackId = null, accessToken = null, countryCode = null } = options;
-    console.log("Fetching metadata for potential renaming...");
+    const { promptUser = true, autoRename = false, trackId = null, accessToken = null, countryCode = null, verbose = true } = options;
+    const log = (...args) => {
+        if (verbose) {
+            console.log(...args);
+        }
+    };
+    log("Fetching metadata for potential renaming...");
     let metadata = await fetchTrackMetadataFromApi(trackId, accessToken, countryCode);
     if (!metadata.title || !metadata.artist) {
         metadata = await fetchTrackMetadataForRenaming(songUrl);
@@ -337,14 +365,14 @@ async function renameDownloadedSong(originalFilePath, songUrl, options = {}) {
     const { title, artist } = metadata;
 
     if (!title || !artist) {
-        console.log("Skipping renaming: insufficient metadata (title/artist missing).");
-        return originalFilePath;
+        log("Skipping renaming: insufficient metadata (title/artist missing).");
+        return { filePath: originalFilePath, title: null, artist: null, renamed: false };
     }
 
     const doRename = promptUser ? await promptUserForConfirmation("Rename file using Artist - Title?", true) : autoRename;
     if (!doRename) {
-        console.log("Skipping renaming as per user choice.");
-        return originalFilePath;
+        log("Skipping renaming as per user choice.");
+        return { filePath: originalFilePath, title, artist, renamed: false };
     }
 
     const fileExt = path.extname(originalFilePath);
@@ -367,18 +395,18 @@ async function renameDownloadedSong(originalFilePath, songUrl, options = {}) {
 
 
     if (newFilePath === originalFilePath) {
-        console.log("Generated filename is same as original. No rename needed.");
-        return originalFilePath;
+        log("Generated filename is same as original. No rename needed.");
+        return { filePath: originalFilePath, title, artist, renamed: false };
     }
 
     try {
-        console.log(`Renaming "${path.basename(originalFilePath)}" to "${path.basename(newFilePath)}"`);
+        log(`Renaming "${path.basename(originalFilePath)}" to "${path.basename(newFilePath)}"`);
         await fs.rename(originalFilePath, newFilePath);
-        console.log(`✅ File renamed successfully to: ${newFilePath}`);
-        return newFilePath;
+        log(`✅ File renamed successfully to: ${newFilePath}`);
+        return { filePath: newFilePath, title, artist, renamed: true };
     } catch (renameError) {
         console.error(`❌ Failed to rename file: ${renameError.message}. Using original filename.`);
-        return originalFilePath;
+        return { filePath: originalFilePath, title, artist, renamed: false };
     }
 }
 
@@ -433,14 +461,14 @@ async function handleSongDownload(session, itemUrl, itemId, outputBaseDir, mp3Op
 
     if (downloadResult && downloadResult.success && downloadResult.filePath) {
         console.log(`\n✅ Song ${itemId} (${selectedQuality.apiCode}) download process finished. Original file: ${downloadResult.filePath}`);
-        const finalFilePath = await renameDownloadedSong(downloadResult.filePath, itemUrl, {
+        const renameResult = await renameDownloadedSong(downloadResult.filePath, itemUrl, {
             trackId: itemId,
             accessToken: session.accessToken,
             countryCode: session.countryCode
         });
-        console.log(`   Final file location: ${finalFilePath}`);
+        console.log(`   Final file location: ${renameResult.filePath}`);
         if (mp3Options?.enabled) {
-            const mp3Path = await convertFileToMp3(finalFilePath, mp3Options);
+            const mp3Path = await convertFileToMp3(renameResult.filePath, mp3Options);
             if (mp3Path) {
                 console.log(`   MP3 file location: ${mp3Path}`);
             }
@@ -497,7 +525,8 @@ async function handlePlaylistDownload(session, itemUrl, playlistId, outputBaseDi
     const outputDir = path.join(outputBaseDir, APP_CONFIG.PLAYLIST_SUBDIR, playlistFolderName);
     await fs.mkdir(outputDir, { recursive: true });
 
-    console.log(`\n📁 Starting playlist download: ${playlistTitle || playlistId}`);
+    const playlistLabel = playlistTitle || playlistId;
+    console.log(`\n${formatStatus('PLAYLIST', ANSI_COLORS.cyan)} ${playlistLabel}`);
     console.log(`   Output directory: ${path.resolve(outputDir)}`);
 
     const { trackIds, skippedCount, totalItems } = await fetchPlaylistTrackIds(
@@ -511,14 +540,16 @@ async function handlePlaylistDownload(session, itemUrl, playlistId, outputBaseDi
         return;
     }
 
-    console.log(`Playlist items: ${totalItems}, tracks to download: ${trackIds.length}, skipped items: ${skippedCount}`);
+    console.log(`Tracks: ${trackIds.length}, skipped items: ${skippedCount}`);
 
     let successCount = 0;
     let failureCount = 0;
+    const quietMp3Options = mp3Options?.enabled ? { ...mp3Options, verbose: false } : mp3Options;
     for (let index = 0; index < trackIds.length; index++) {
         const trackId = trackIds[index];
         const trackUrl = `https://tidal.com/browse/track/${trackId}`;
-        console.log(`\n🎵 [${index + 1}/${trackIds.length}] Downloading track ID: ${trackId}`);
+        const progressLabel = `[${index + 1}/${trackIds.length}]`;
+        console.log(`${formatStatus(progressLabel, ANSI_COLORS.dim)} Downloading track ${trackId}`);
 
         try {
             const downloadResult = await downloadMusicTrack({
@@ -526,33 +557,40 @@ async function handlePlaylistDownload(session, itemUrl, playlistId, outputBaseDi
                 audioQuality: selectedQuality.apiCode,
                 accessToken: session.accessToken,
                 outputDir: outputDir,
-                countryCode: session.countryCode
+                countryCode: session.countryCode,
+                verbose: false
             });
 
             if (downloadResult && downloadResult.success && downloadResult.filePath) {
-                const finalFilePath = await renameDownloadedSong(downloadResult.filePath, trackUrl, {
+                const renameResult = await renameDownloadedSong(downloadResult.filePath, trackUrl, {
                     promptUser: false,
                     autoRename: renameAll,
                     trackId: trackId,
                     accessToken: session.accessToken,
-                    countryCode: session.countryCode
+                    countryCode: session.countryCode,
+                    verbose: false
                 });
-                if (mp3Options?.enabled) {
-                    await convertFileToMp3(finalFilePath, mp3Options);
+                if (quietMp3Options?.enabled) {
+                    await convertFileToMp3(renameResult.filePath, quietMp3Options);
                 }
+                const displayName = renameResult?.title && renameResult?.artist
+                    ? `${renameResult.artist} - ${renameResult.title}`
+                    : path.basename(renameResult.filePath);
+                console.log(`${formatStatus('OK', ANSI_COLORS.green)} ${displayName}`);
                 successCount++;
             } else {
                 const errorMsg = downloadResult ? downloadResult.error : 'Unknown download error';
-                console.error(`❌ Track ${trackId} download failed. ${errorMsg}`);
+                console.error(`${formatStatus('ERR', ANSI_COLORS.red)} Track ${trackId} failed. ${errorMsg}`);
                 failureCount++;
             }
         } catch (error) {
-            console.error(`❌ Error downloading track ${trackId}: ${error.message}`);
+            console.error(`${formatStatus('ERR', ANSI_COLORS.red)} Track ${trackId} error: ${error.message}`);
             failureCount++;
         }
     }
 
-    console.log(`\n✅ Playlist download complete. Success: ${successCount}, Failed: ${failureCount}.`);
+    const summary = `Success: ${successCount}, Failed: ${failureCount}.`;
+    console.log(`\n${formatStatus('DONE', ANSI_COLORS.green)} ${summary}`);
 }
 
 async function main() {
