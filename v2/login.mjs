@@ -1,8 +1,8 @@
 import { promises as fs } from 'fs';
 
 const DEFAULT_API_CLIENT_CONFIG = {
-    clientId: '7m7Ap0JC9j1cOM3n',
-    clientSecret: 'vRAdA108tlvkJpTsGZS8rGZ7xTlbJ0qaZ2K9saEzsgY=',
+    clientId: 'fX2JxdmntZWK0ixT',
+    clientSecret: '1Nn9AfDAjxrgJFJbKNWLeAyKGVGmINuXPPLHVXAvxAg=',
     scope: 'r_usr w_usr w_sub'
 };
 
