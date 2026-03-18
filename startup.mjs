@@ -12,6 +12,8 @@ import { authenticate } from './v2/login.mjs';
 import { downloadMusicTrack } from './v2/music.mjs';
 import { downloadVideo, fetchAvailableVideoStreams } from './v2/video.mjs';
 import { fetchPlaylistMetadata, fetchPlaylistTrackIds } from './v2/playlist.mjs';
+import { hasAria2c } from './v2/downloader.mjs';
+import { initializeDebugLogging } from './v2/logger.mjs';
 
 const execAsync = util.promisify(exec);
 const TIDAL_API_BASE_URL = 'https://listen.tidal.com/v1';
@@ -42,8 +44,9 @@ const UI_TEXT = {
     WELCOME_BANNER_TOP: "╔═════════════════════════════════════════════════╗",
     WELCOME_BANNER_MID: "║           Welcome to Tidal Downloader!          ║",
     WELCOME_BANNER_BOT: "╚═════════════════════════════════════════════════╝",
-    ARIA2C_NOTICE: "\nMake sure you have 'aria2c' installed and in your system's PATH.",
+    ARIA2C_NOTICE: "\nSegmented downloads use aria2c automatically when available, otherwise the built-in downloader is used.",
     DOWNLOAD_DIR_NOTICE: "Default downloads directory is './downloads' (you can change this at startup).",
+    DEBUG_LOG_NOTICE: "Debug logging is enabled. Log file:",
     AUTHENTICATING_MSG: "\nAttempting to authenticate with Tidal...",
     AUTH_SUCCESS_MSG: "\n✅ Successfully authenticated with Tidal!",
     AUTH_FAILED_MSG: "\nAuthentication failed, or no valid session obtained. Cannot proceed.",
@@ -594,11 +597,16 @@ async function handlePlaylistDownload(session, itemUrl, playlistId, outputBaseDi
 }
 
 async function main() {
+    const debugLogPath = await initializeDebugLogging();
+    const aria2cInstalled = await hasAria2c();
+
     console.log(UI_TEXT.WELCOME_BANNER_TOP);
     console.log(UI_TEXT.WELCOME_BANNER_MID);
     console.log(UI_TEXT.WELCOME_BANNER_BOT);
-    console.log(UI_TEXT.ARIA2C_NOTICE);
+    console.log(`${UI_TEXT.ARIA2C_NOTICE} (${aria2cInstalled ? 'aria2c detected' : 'using built-in fallback'})`);
     console.log(UI_TEXT.DOWNLOAD_DIR_NOTICE);
+    console.log(`${UI_TEXT.DEBUG_LOG_NOTICE} ${debugLogPath}`);
+    console.log("Optional auth override file: tidal_auth.json");
 
     const outputBaseDir = await promptForOutputBaseDir();
     const mp3Options = await promptForMp3ConversionOptions();

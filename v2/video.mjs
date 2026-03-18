@@ -1,11 +1,8 @@
 import axios from 'axios';
-import { exec } from 'child_process';
 import { promises as fs, createWriteStream } from 'fs';
 import path from 'path';
-import util from 'util';
 import readline from 'readline';
-
-const execAsync = util.promisify(exec);
+import { downloadSegments } from './downloader.mjs';
 
 const TIDAL_API_BASE_URL = 'https://listen.tidal.com/v1';
 const DEFAULT_PLAYBACKINFO_VIDEO_QUALITY = 'HIGH';
@@ -195,8 +192,6 @@ async function downloadVideo(options) {
     const { outputBasename, tempDirIdentifier } = await determineOutputFilenameAndTempBase(videoId, selectedStreamUrl, tidalUrl, userAgent);
     const outputFilePath = path.resolve(outputDir, outputBasename);
     const tempDirPath = path.resolve(outputDir, `${TEMP_DIR_VIDEO_PREFIX}_${tempDirIdentifier}_${Date.now()}`);
-    let aria2cInputFilePath = '';
-
     try {
         console.log(`Fetching media playlist for selected quality: ${selectedStreamUrl}`);
         const mediaPlaylistResponse = await axios.get(selectedStreamUrl, { headers: { 'User-Agent': userAgent }});
@@ -212,16 +207,17 @@ async function downloadVideo(options) {
         await fs.mkdir(tempDirPath, { recursive: true });
         console.log(`Temporary directory created: ${tempDirPath}`);
 
-        aria2cInputFilePath = path.join(tempDirPath, 'segment_urls.txt');
-        const aria2cUrlsWithHeaders = segmentUrls.map(url => `${url}\n header=User-Agent: ${userAgent}`);
-        await fs.writeFile(aria2cInputFilePath, aria2cUrlsWithHeaders.join('\n'));
-        console.log('Generated URL list with headers for aria2c.');
-
-        const aria2cCommand = `aria2c ${ARIA2C_VIDEO_OPTIONS} -d "${tempDirPath}" -i "${aria2cInputFilePath}"`;
-        console.log('Starting video download with aria2c...');
-        console.log(`Executing: ${aria2cCommand}`);
-        await execAsync(aria2cCommand);
-        console.log('aria2c video download process completed.');
+        const segmentEntries = segmentUrls.map((url, index) => ({
+            url,
+            fileName: segmentFilenames[index],
+        }));
+        await downloadSegments({
+            entries: segmentEntries,
+            tempDirPath,
+            aria2cOptions: ARIA2C_VIDEO_OPTIONS,
+            headers: { 'User-Agent': userAgent },
+            log: console.log,
+        });
 
         console.log(`Concatenating ${segmentFilenames.length} segments into ${outputFilePath}...`);
         const outputStream = createWriteStream(outputFilePath);
@@ -256,7 +252,7 @@ async function downloadVideo(options) {
                 errorMessage += ` Detail: ${typeof error.response.data === 'string' ? error.response.data.substring(0,300) : JSON.stringify(error.response.data).substring(0,300)}`;
             }
         } else if (error.stderr || error.stdout) {
-            errorMessage += `\n  aria2c Stderr: ${error.stderr}\n  aria2c Stdout: ${error.stdout}`;
+            errorMessage += `\n  Downloader stderr: ${error.stderr}\n  Downloader stdout: ${error.stdout}`;
         }
         console.error(errorMessage);
         throw error;

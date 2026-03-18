@@ -2,12 +2,9 @@
 
 import axios from 'axios';
 import { parseStringPromise } from 'xml2js';
-import { exec } from 'child_process';
 import { promises as fs, createWriteStream } from 'fs';
 import path from 'path';
-import util from 'util';
-
-const execAsync = util.promisify(exec);
+import { downloadSegments } from './downloader.mjs';
 
 const TIDAL_API_BASE_URL = 'https://listen.tidal.com/v1';
 const ARIA2C_DEFAULT_OPTIONS = '-c -x 16 -s 16 -k 1M -j 16 --console-log-level=warn --allow-overwrite=true --auto-file-renaming=false';
@@ -134,15 +131,16 @@ async function downloadMusicTrack(options) {
         await fs.mkdir(tempDirPath, { recursive: true });
         log(`Temporary directory created: ${tempDirPath}`);
 
-        const aria2cInputFilePath = path.join(tempDirPath, 'segment_urls.txt');
-        await fs.writeFile(aria2cInputFilePath, segmentUrls.join('\n'));
-        log('Generated URL list for aria2c.');
-
-        const aria2cCommand = `aria2c ${ARIA2C_DEFAULT_OPTIONS} -d "${tempDirPath}" -i "${aria2cInputFilePath}"`;
-        log('Starting download with aria2c...');
-        log(`Executing: ${aria2cCommand}`);
-        await execAsync(aria2cCommand);
-        log('aria2c download process completed.');
+        const segmentEntries = segmentUrls.map((url, index) => ({
+            url,
+            fileName: segmentBasenames[index],
+        }));
+        await downloadSegments({
+            entries: segmentEntries,
+            tempDirPath,
+            aria2cOptions: ARIA2C_DEFAULT_OPTIONS,
+            log,
+        });
 
         log(`Concatenating ${segmentBasenames.length} segments into ${outputFilePath}...`);
         const outputStream = createWriteStream(outputFilePath);
@@ -177,7 +175,7 @@ async function downloadMusicTrack(options) {
                 console.error(`Full API error response: ${JSON.stringify(error.response.data, null, 2)}`);
             }
         } else if (error.stderr || error.stdout) {
-            errorMessage += `\n  aria2c Stderr: ${error.stderr}\n  aria2c Stdout: ${error.stdout}`;
+            errorMessage += `\n  Downloader stderr: ${error.stderr}\n  Downloader stdout: ${error.stdout}`;
         }
         console.error(errorMessage);
         throw error;

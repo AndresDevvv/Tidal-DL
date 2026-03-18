@@ -1,16 +1,19 @@
 import { promises as fs } from 'fs';
 
-const API_CLIENT_CONFIG = {
+const DEFAULT_API_CLIENT_CONFIG = {
     clientId: '7m7Ap0JC9j1cOM3n',
     clientSecret: 'vRAdA108tlvkJpTsGZS8rGZ7xTlbJ0qaZ2K9saEzsgY=',
     scope: 'r_usr w_usr w_sub'
 };
 
 const TIDAL_AUTH_BASE_URL = 'https://auth.tidal.com/v1/oauth2';
-const SESSION_PERSISTENCE_FILE = 'tidal_session.json';
+const DEFAULT_SESSION_PERSISTENCE_FILE = 'tidal_session.json';
+const AUTH_CONFIG_FILE = 'tidal_auth.json';
 const DEFAULT_HTTP_RETRY_DELAY_SECONDS = 20;
 const DEFAULT_FETCH_MAX_RETRIES = 3;
 const GENERIC_RETRY_BASE_MILLISECONDS = 2000;
+
+let cachedRuntimeAuthConfigPromise;
 
 class TidalAuthSession {
     constructor(initialSessionData = {}) {
@@ -67,6 +70,7 @@ class TidalAuthSession {
 }
 
 async function persistSession(sessionInstance) {
+    const sessionFilePath = await getSessionPersistenceFile();
     const dataToPersist = {
         userId: sessionInstance.userId,
         countryCode: sessionInstance.countryCode,
@@ -75,27 +79,61 @@ async function persistSession(sessionInstance) {
         tokenExpiresAtTimestamp: sessionInstance.tokenExpiresAtTimestamp,
     };
     try {
-        await fs.writeFile(SESSION_PERSISTENCE_FILE, JSON.stringify(dataToPersist, null, 2));
-        console.log(`Session data saved to ${SESSION_PERSISTENCE_FILE}`);
+        await fs.writeFile(sessionFilePath, JSON.stringify(dataToPersist, null, 2));
+        console.log(`Session data saved to ${sessionFilePath}`);
     } catch (error) {
-        console.error(`Failed to save session to ${SESSION_PERSISTENCE_FILE}:`, error.message);
+        console.error(`Failed to save session to ${sessionFilePath}:`, error.message);
     }
 }
 
 async function retrievePersistedSession() {
+    const sessionFilePath = await getSessionPersistenceFile();
     try {
-        const rawData = await fs.readFile(SESSION_PERSISTENCE_FILE, 'utf8');
+        const rawData = await fs.readFile(sessionFilePath, 'utf8');
         const loadedSessionData = JSON.parse(rawData);
-        console.log(`Session data loaded from ${SESSION_PERSISTENCE_FILE}`);
+        console.log(`Session data loaded from ${sessionFilePath}`);
         return new TidalAuthSession(loadedSessionData);
     } catch (error) {
         if (error.code === 'ENOENT') {
-            console.log(`No session file found (${SESSION_PERSISTENCE_FILE}). A new session will be initiated.`);
+            console.log(`No session file found (${sessionFilePath}). A new session will be initiated.`);
         } else {
-            console.warn(`Could not load session from ${SESSION_PERSISTENCE_FILE} (${error.message}). A new session will be initiated.`);
+            console.warn(`Could not load session from ${sessionFilePath} (${error.message}). A new session will be initiated.`);
         }
         return new TidalAuthSession();
     }
+}
+
+async function loadRuntimeAuthConfig() {
+    if (!cachedRuntimeAuthConfigPromise) {
+        cachedRuntimeAuthConfigPromise = (async () => {
+            let fileConfig = {};
+
+            try {
+                const rawConfig = await fs.readFile(AUTH_CONFIG_FILE, 'utf8');
+                fileConfig = JSON.parse(rawConfig);
+                console.log(`Loaded authentication config from ${AUTH_CONFIG_FILE}`);
+            } catch (error) {
+                if (error.code !== 'ENOENT') {
+                    console.warn(`Failed to parse ${AUTH_CONFIG_FILE}: ${error.message}`);
+                }
+            }
+
+            return {
+                clientId: process.env.TIDAL_CLIENT_ID || fileConfig.clientId || DEFAULT_API_CLIENT_CONFIG.clientId,
+                clientSecret: process.env.TIDAL_CLIENT_SECRET || fileConfig.clientSecret || DEFAULT_API_CLIENT_CONFIG.clientSecret,
+                scope: process.env.TIDAL_SCOPE || fileConfig.scope || DEFAULT_API_CLIENT_CONFIG.scope,
+                sessionFile: process.env.TIDAL_SESSION_FILE || fileConfig.sessionFile || DEFAULT_SESSION_PERSISTENCE_FILE,
+                authConfigFileUsed: Object.keys(fileConfig).length > 0,
+            };
+        })();
+    }
+
+    return cachedRuntimeAuthConfigPromise;
+}
+
+async function getSessionPersistenceFile() {
+    const config = await loadRuntimeAuthConfig();
+    return config.sessionFile;
 }
 
 async function fetchWithRetries(url, fetchOptions, maxRetries = DEFAULT_FETCH_MAX_RETRIES) {
@@ -134,9 +172,10 @@ async function parseErrorResponse(response) {
 
 async function requestDeviceCode(sessionInstance) {
     console.log("Requesting new device authorization code...");
+    const authConfig = await loadRuntimeAuthConfig();
     const requestBody = new URLSearchParams({
-        client_id: API_CLIENT_CONFIG.clientId,
-        scope: API_CLIENT_CONFIG.scope
+        client_id: authConfig.clientId,
+        scope: authConfig.scope
     });
 
     const response = await fetchWithRetries(`${TIDAL_AUTH_BASE_URL}/device_authorization`, {
@@ -148,7 +187,13 @@ async function requestDeviceCode(sessionInstance) {
     if (!response.ok) {
         const errorDetails = await parseErrorResponse(response);
         const errorMessage = errorDetails.userMessage || errorDetails.message || errorDetails.messageFromStatus || 'Unknown server error';
-        throw new Error(`Failed to request device code: ${response.status} - ${errorMessage}`);
+        let hint = '';
+        if (response.status === 401) {
+            hint = authConfig.authConfigFileUsed || process.env.TIDAL_CLIENT_ID
+                ? ' The configured client credentials were rejected.'
+                : ` The bundled client credentials may no longer be accepted. Add ${AUTH_CONFIG_FILE} or set TIDAL_CLIENT_ID/TIDAL_CLIENT_SECRET to override them.`;
+        }
+        throw new Error(`Failed to request device code: ${response.status} - ${errorMessage}.${hint}`);
     }
 
     const responseData = await response.json();
@@ -159,18 +204,22 @@ async function requestDeviceCode(sessionInstance) {
     sessionInstance.authCheckIntervalMs = responseData.interval * 1000;
 
     console.log("\n--- TIDAL DEVICE AUTHENTICATION REQUIRED ---");
-    console.log(`1. Open a web browser and go to: https://${sessionInstance.verificationUrl}`);
+    const verificationUrl = sessionInstance.verificationUrl.startsWith('http')
+        ? sessionInstance.verificationUrl
+        : `https://${sessionInstance.verificationUrl}`;
+    console.log(`1. Open a web browser and go to: ${verificationUrl}`);
     console.log(`2. If prompted, enter this code: ${sessionInstance.userCode}`);
     console.log("--- WAITING FOR AUTHORIZATION ---");
 }
 
 async function pollForDeviceAccessToken(sessionInstance) {
-    const basicAuthToken = createBasicAuthHeader(API_CLIENT_CONFIG.clientId, API_CLIENT_CONFIG.clientSecret);
+    const authConfig = await loadRuntimeAuthConfig();
+    const basicAuthToken = createBasicAuthHeader(authConfig.clientId, authConfig.clientSecret);
     const requestBody = new URLSearchParams({
-        client_id: API_CLIENT_CONFIG.clientId,
+        client_id: authConfig.clientId,
         device_code: sessionInstance.deviceCode,
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-        scope: API_CLIENT_CONFIG.scope
+        scope: authConfig.scope
     });
 
     process.stdout.write("Polling for authorization");
@@ -220,12 +269,13 @@ async function attemptTokenRefresh(sessionInstance) {
         return false;
     }
     console.log("Attempting to refresh access token...");
-    const basicAuthToken = createBasicAuthHeader(API_CLIENT_CONFIG.clientId, API_CLIENT_CONFIG.clientSecret);
+    const authConfig = await loadRuntimeAuthConfig();
+    const basicAuthToken = createBasicAuthHeader(authConfig.clientId, authConfig.clientSecret);
     const requestBody = new URLSearchParams({
-        client_id: API_CLIENT_CONFIG.clientId,
+        client_id: authConfig.clientId,
         refresh_token: sessionInstance.refreshToken,
         grant_type: 'refresh_token',
-        scope: API_CLIENT_CONFIG.scope
+        scope: authConfig.scope
     });
 
     const response = await fetchWithRetries(`${TIDAL_AUTH_BASE_URL}/token`, {
@@ -294,5 +344,5 @@ export {
     attemptTokenRefresh as refreshAccessToken,
     requestDeviceCode as getDeviceCode,
     pollForDeviceAccessToken as pollForToken,
-    API_CLIENT_CONFIG as API_CLIENT
+    DEFAULT_API_CLIENT_CONFIG as API_CLIENT
 };
